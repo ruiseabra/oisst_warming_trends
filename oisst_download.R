@@ -1,5 +1,9 @@
 # MAINTAIN A LOCAL REPOSITORY OF OISST
-# 
+# AND COMPUTE GLOBAL SST WARMING TRENDS
+
+# - requires "sstcoremulti", a C++ program to eficiently transform time slices (daily sst data) into pixel time-series (sst cores); "sstcoremulti" can be found in the same GitHub repository
+# - must be run before "oisst_warming_trends_analysis.R", which will look for the "info" and "stat" files produced by this script
+
 # DATASET:
 # NOAA'S 1/4  arc-degree Daily
 # 53 Optimum Interpolation SST version 2 (dOISST.v2)
@@ -9,20 +13,23 @@
 # environmental studies. Earth System Science Data 8, 165–176. doi:10.5194/essd-8-165-2016.
 # --
 
-# Local repository consists of all available daily sst data since 1981-09-01
-# 2 folders are created: 
-#   - "sst" contains 1 file per day (basically a simplified version of the original data)
-#   - "sst_cores" contains 1 file per ocean pixel, with the entire time series available
-# Data is saved in binary, with vals only for ocean pixels
-# Info files are saved to allow easy reconstruction of the original map and computation of stats
+# Local repository consists of all available daily oisst data since 1981-09-01
+# 2 folders are created:
+#   - "oisst_repository" is where the local repository is saved; inside...
+#     - "daily" contains 1 file per day (basically a simplified version of the original data)
+#     - "cores" contains 1 file per ocean pixel, with the entire time-series available
+#   - "oisst_download_outputs" is where "info" and "stat" files are saved to allow easy reconstruction of the original map
+# Repository data is saved in binary, with vals only for ocean pixels
 
-# NOTE: The code can be re-run to update the local oisst repository. In that case only oisst data not yet locally available will be downloaded. Rebuilding the cores (takes a long time) only happens after at least 90 new days of data have been added to the local repository, but  the user can force it by overriding the if statement.
+# The "stat" files saved to "oisst_download_outputs" are:
+#   - "slope_per_decade.RDS", the slope of the linear regression of the seasonally detrended sst time-series (aka warming rate, in degrees C per decade)
+#   - "se_corr.RDS", the standard error of the slope, with a correction to the number of degrees of freedom in order to account for temporal autocorrelation
+
+# NOTE: The code can be re-run to update the local oisst repository. In that case only oisst data not yet locally available will be downloaded. Rebuilding the cores (takes a long time) only happens after at least 90 new days of data have been added to the local repository, but  the user can force it by overriding the if statement. Updating of the "stat" files also only happens when cores are rebuilt.
 
 libraries <- c("ncdf4", "raster", "doParallel", "stringr", "lubridate", "tibble", "dplyr", "readr", "purrr", "xts")
 for (l in libraries) library(l, character.only = TRUE)
 
-is.Apollo <- Sys.info()["nodename"] == "Apollo"
-if(!is.Apollo) stop("this script is designed to run in our 160-cores Apollo server.\nthis machine is not the Apollo server, but if you still wish to continue then just ignore this warning, adjust the number of cores in the \"registerDoParallel\" statement to match your machine's and run the code - less cores, more run time")
 CORES <- 140
 registerDoParallel(CORES)
 
@@ -36,13 +43,18 @@ if(!has.sstcoremulti) {
 
 ## folders ----
 url <- "https://www.ncei.noaa.gov/thredds/fileServer/OisstBase/NetCDF/AVHRR/XXXXX/"
-sst_folder  <- "sst"
-core_folder <- "sst_cores"
-if (!dir.exists(sst_folder))  dir.create(sst_folder)
-if (!dir.exists(core_folder)) dir.create(core_folder)
-fn_tmp   <- "tmp"
-fn_info1 <- "oisst_info1.RData"
-fn_info2 <- "oisst_info2.RData"
+rep <- "oisst_repository/"
+if (!dir.exists(rep)) dir.create(rep)
+daily_folder  <- str_c(rep, "daily")
+cores_folder  <- str_c(rep, "cores")
+if (!dir.exists(daily_folder)) dir.create(daily_folder)
+if (!dir.exists(cores_folder)) dir.create(cores_folder)
+fn_tmp     <- "tmp"
+out_folder <- "oisst_download_outputs/"
+if (!dir.exists(out_folder)) dir.create(cores_folder)
+fn_info1   <- str_c(out_folder, "oisst_info1.RData")
+fn_info2   <- str_c(out_folder, "oisst_info2.RData")
+
 
 ## date range ----
 ## # download data from t0 to t1 (or the closest available)
@@ -60,8 +72,8 @@ x <- tibble(
   date2  = str_replace_all(date1, "-", ""),
   date3  = str_sub(date2, 1, 6),
   fnmWEB = str_c("avhrr-only-v2.", date2, ".nc"),
-  fnmTMP = str_c(sst_folder, "/", date1, ".tmp"),
-  fnmSST = str_c(sst_folder, "/", date1, "_sst"),
+  fnmTMP = str_c(daily_folder, "/", date1, ".tmp"),
+  fnmSST = str_c(daily_folder, "/", date1, "_sst"),
   url    = str_c(str_replace_all(url, "XXXXX", date3), fnmWEB))
 
 ## sst helper data ----
@@ -133,7 +145,7 @@ load(fn_info1)
 ## this is done sequentially so that it is easy to spot the last available file in the server
 ## only the first clean run of the script will take longer
 ## subsequent runs will only download files not yet in the database
-old <- dir(sst_folder)
+old <- dir(daily_folder)
 cat("downloading sst files\n")
 void <- foreach(i = 1:nrow(x), .inorder = FALSE) %dopar% {
   fnmSST <- x$fnmSST[i]
@@ -165,7 +177,7 @@ void <- foreach(i = 1:nrow(x), .inorder = FALSE) %dopar% {
     unlink(fnmTMP)
   }
 }
-new <- dir(sst_folder)
+new <- dir(daily_folder)
 new <- new[!(new %in% old)]
 MSG1 <- if (length(new)) {
   str_c("sst files downloaded:\n   ", str_c(new, collapse = "\n   "))
@@ -181,8 +193,8 @@ if (has.sstcoremulti) {
   ##   this is only performed automatically if there are more than 3 months
   ##   of new data to be appended to the existing sst cores
   
-  sst_files  <- dir(sst_folder,  pattern = "_sst", full.names = TRUE)
-  core_files <- dir(core_folder, pattern = "RDS",  full.names = TRUE)
+  sst_files  <- dir(daily_folder, pattern = "_sst", full.names = TRUE)
+  core_files <- dir(cores_folder, pattern = "RDS",  full.names = TRUE)
   
   # compute the size of each core to closely
   # match the number of processor threads available
@@ -192,13 +204,15 @@ if (has.sstcoremulti) {
   core_size <- (maxInd / CORES) / 1000
   core_size <- ceiling(core_size) * 1000
   
+  MSG2 <- ""
+  
   ## rebuild cores ----
   ## zero core files available = rebuilding from scratch
   if (!length(core_files)) {
     MSG2 <- "sst cores rebuilt from scratch\n"
     
-    unlink(core_folder, recursive = TRUE)
-    dir.create(core_folder)
+    unlink(cores_folder, recursive = TRUE)
+    dir.create(cores_folder)
     
     # write a list of all sst files available
     sst_list <- "sst_list"
@@ -215,7 +229,7 @@ if (has.sstcoremulti) {
     
     dat$call <- str_c("sstcoremulti ", sst_list, " ", dat$ind)
     dat$core <- str_c("core", formatC(1:nrow(dat), width = 3, flag = "0"))
-    dat$fn   <- str_c(core_folder, "/", dat$core, ".RDS")
+    dat$fn   <- str_c(cores_folder, "/", dat$core, ".RDS")
     
     fn0 <- first( sst_files) %>% gsub("[^0-9-]", "", .)
     fn1 <- last(  sst_files) %>% gsub("[^0-9-]", "", .)
@@ -296,9 +310,9 @@ if (has.sstcoremulti) {
       tibble(id = i, core = ceiling(i / 5000), ind = i %% 5000)
     }
     
-    apply2coreS <- function(sst_cores_folder = "/home/ruiseabra/Dropbox/RS/BIO/DATASETS/oisst/sst_cores/", FUNS, fun_detrend = NULL, smooth = NULL, fullYears = TRUE) {
-      n_cores <- length(dir(sst_cores_folder))
-      x  <- readRDS(str_c(sst_cores_folder, "core001.RDS"))
+    apply2coreS <- function(oisst_cores_folder, FUNS, fun_detrend = NULL, smooth = NULL, fullYears = TRUE) {
+      n_cores <- length(dir(oisst_cores_folder))
+      x  <- readRDS(str_c(oisst_cores_folder, "core001.RDS"))
       d1 <- seq.Date(as_date(x$fn0), as_date(x$fn1), by = "days")
       d2 <- seq.Date(as_date(str_c(str_sub(x$fn0, 1, 5), "01-01")), as_date(str_c(str_sub(x$fn1, 1, 5), "12-31")), by = "days")
       d3 <- d2[!(d2 %in% d1)] %>% str_sub(1, 4) %>% unique
@@ -309,7 +323,7 @@ if (has.sstcoremulti) {
       }
       registerDoParallel(min(n_cores, 140))
       all_results <- foreach(i = 1:n_cores, .inorder = FALSE) %dopar% {
-        list(i = i, res = apply2core(i, sst_cores_folder, FUNS, fun_detrend, smooth, fullYears))
+        list(i = i, res = apply2core(i, oisst_cores_folder, FUNS, fun_detrend, smooth, fullYears))
       }
       all_results <- purrr::map(all_results, "res")[map_dbl(all_results, "i")]
       ALL_RESULTS <- list()
@@ -320,8 +334,8 @@ if (has.sstcoremulti) {
       list(n = sum(fullYears), r = ALL_RESULTS)
     }
     
-    apply2core <- function(core_number, sst_cores_folder, FUNS, fun_detrend, smooth, fullYears) {
-      core <- str_c(sst_cores_folder, "core", formatC(core_number, width = 3, flag = "0"), ".RDS")
+    apply2core <- function(core_number, oisst_cores_folder, FUNS, fun_detrend, smooth, fullYears) {
+      core <- str_c(oisst_cores_folder, "core", formatC(core_number, width = 3, flag = "0"), ".RDS")
       if (!file.exists(core)) stop("target file is missing")
       x  <- readRDS(core)
       t0 <- gsub("[^0-9-]", "", x$fn0) %>% as_date
@@ -419,18 +433,17 @@ if (has.sstcoremulti) {
   }
   load(fn_info2)
   
-  ## compute stats ----
-  unlink("outputs/", recursive = TRUE)
-  dir.create("outputs/")
-
-  # slope stats from detrended data using smoothed climatology
-  stats <- apply2coreS(FUNS = fun_list, fun_detrend = fun_detrend, smooth = 30)
-  n     <- stats$n
-  stats <- stats$r
-  names(stats) <- fun_list
-  for (i in 1:length(stats)) {
-    stat <- list(n = n, vals = stats[[i]])
-    saveRDS(stat, file = str_c("outputs/", fun_list[i], ".RDS"))
+  if (MSG2 == "sst cores updated\n") {
+    ## compute stats ----
+    # slope stats from detrended data using smoothed climatology
+    stats <- apply2coreS(oisst_cores_folder = cores_folder, FUNS = fun_list, fun_detrend = fun_detrend, smooth = 30)
+    n     <- stats$n
+    stats <- stats$r
+    names(stats) <- fun_list
+    for (i in 1:length(stats)) {
+      stat <- list(n = n, vals = stats[[i]])
+      saveRDS(stat, file = str_c(out_folder, fun_list[i], ".RDS"))
+    }
   }
 }
 
