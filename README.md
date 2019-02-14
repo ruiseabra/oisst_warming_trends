@@ -3,9 +3,7 @@
 Accompanying code repository with scripts and programs for the paper:
 
 > Reduced nearshore warming associated with Eastern Boundary Upwelling Systems.
-
 > Rui Seabra, Rubén Varela, António M. Santos, Moncho Gomez-Gesteira, Claudia Meneghesso, David S. Wethey, Fernando P. Lima.
-
 > Frontiers in Marine Science, 2019.
 
 The repository is structured as follows:
