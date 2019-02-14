@@ -2,9 +2,9 @@
 
 Accompanying code repository with scripts and programs for the paper:
 
-**Reduced nearshore warming associated with Eastern Boundary Upwelling Systems**
-*Rui Seabra, Rubén Varela, António M. Santos, Moncho Gomez-Gesteira, Claudia Meneghesso, David S. Wethey, Fernando P. Lima*
-**Frontiers in Marine Science, 2019**
+> Reduced nearshore warming associated with Eastern Boundary Upwelling Systems.
+> Rui Seabra, Rubén Varela, António M. Santos, Moncho Gomez-Gesteira, Claudia Meneghesso, David S. Wethey, Fernando P. Lima.
+> Frontiers in Marine Science, 2019.
 
 The repository is structured as follows:
 - `preliminary_system_check.R`: this script conveniently checks if all libraries, programs and required data is present/installed in the machine, and in the correct locations.
